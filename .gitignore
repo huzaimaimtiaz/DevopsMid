@@ -3,3 +3,5 @@ venv/
 artifacts/
 __pycache__/
 *.pyc
+requirements.lock
+live.json
