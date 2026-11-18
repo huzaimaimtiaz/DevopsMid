@@ -11,11 +11,13 @@ pipeline {
     }
 
     environment {
-        STUDENT_ID = 'FA23-BDS-017'
-        IMAGE      = 'midterm-fa23-bds-017'
-        CONTAINER  = 'midterm-app'
-        VENV       = '.venv-ci'
-        NOTIFY_TO  = 'qasimalik@gmail.com'
+        STUDENT_ID     = 'FA23-BDS-017'
+        IMAGE          = 'midterm-fa23-bds-017'
+        DOCKERHUB_REPO = 'huzaimaimtiaz/midterm-fa23-bds-017'
+        CONTAINER      = 'midterm-app'
+        VENV           = '.venv-ci'
+        NOTIFY_TO      = 'qasimalik@gmail.com'
+        MY_EMAIL       = 'huzaimaimtiaz2@gmail.com'
     }
 
     stages {
@@ -87,6 +89,25 @@ pipeline {
                 '''
             }
         }
+
+        stage('Push to Docker Hub') {
+            steps {
+                catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
+                    withCredentials([usernamePassword(credentialsId: 'dockerhub-creds',
+                                     usernameVariable: 'DH_USER', passwordVariable: 'DH_TOKEN')]) {
+                        sh '''
+                            echo "$DH_TOKEN" | docker login -u "$DH_USER" --password-stdin
+                            docker tag $IMAGE:$BUILD_NUMBER $DOCKERHUB_REPO:$BUILD_NUMBER
+                            docker tag $IMAGE:$BUILD_NUMBER $DOCKERHUB_REPO:latest
+                            docker push $DOCKERHUB_REPO:$BUILD_NUMBER
+                            docker push $DOCKERHUB_REPO:latest
+                            docker rmi $DOCKERHUB_REPO:$BUILD_NUMBER || true
+                            docker logout
+                        '''
+                    }
+                }
+            }
+        }
     }
 
     post {
@@ -100,8 +121,21 @@ pipeline {
         always {
             script {
                 def m = fileExists('artifacts/metrics.json') ? readFile('artifacts/metrics.json') : 'metrics.json not produced'
+
+                // Our own test commits (author/committer "huzaima...") email only me.
+                // Any other commit (e.g. the instructor's grading push) emails the instructor too.
+                def who = 'unknown'
+                try {
+                    who = sh(script: "git log -1 --pretty='%an %ae %cn %ce'", returnStdout: true).trim()
+                } catch (err) {
+                    echo "Could not read commit author: ${err}"
+                }
+                def ownCommit = who.toLowerCase().contains('huzaima')
+                def recipients = ownCommit ? env.MY_EMAIL : "${env.NOTIFY_TO}, ${env.MY_EMAIL}"
+                echo "Last commit by: ${who} -> emailing: ${recipients}"
+
                 emailext(
-                    to: env.NOTIFY_TO,
+                    to: recipients,
                     subject: "${env.STUDENT_ID} - MIDTERM-${env.STUDENT_ID} build #${env.BUILD_NUMBER}: ${currentBuild.currentResult}",
                     mimeType: 'text/plain',
                     body: """Student Reg No: ${env.STUDENT_ID}
@@ -109,7 +143,9 @@ Job: ${env.JOB_NAME}
 Build: #${env.BUILD_NUMBER}
 Result: ${currentBuild.currentResult}
 Commit: ${env.GIT_COMMIT}
+Commit by: ${who}
 Build URL: ${env.BUILD_URL}
+Docker image: ${env.DOCKERHUB_REPO}:${env.BUILD_NUMBER}
 
 Model metrics:
 ${m}
